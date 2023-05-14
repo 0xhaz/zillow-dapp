@@ -1,11 +1,11 @@
-//SPDX-License-Identifier: Unlicense
+// SPDX-License-Identifier: SEE LICENSE IN LICENSE
 pragma solidity ^0.8.0;
 
 interface IERC721 {
     function transferFrom(
         address _from,
         address _to,
-        uint256 _id
+        uint256 _tokenId
     ) external;
 }
 
@@ -15,17 +15,17 @@ contract Escrow {
     address public inspector;
     address public lender;
 
-    modifier onlyBuyer(uint256 _nftID) {
-        require(msg.sender == buyer[_nftID], "Only buyer can call this method");
-        _;
-    }
-
     modifier onlySeller() {
         require(msg.sender == seller, "Only seller can call this method");
         _;
     }
 
-    modifier onlyInspector() {
+    modifier onlyBuyer(uint256 _nftID) {
+        require(msg.sender == buyer[_nftID], "Only buyer can call this method");
+        _;
+    }
+
+    modifier onlyInspection() {
         require(msg.sender == inspector, "Only inspector can call this method");
         _;
     }
@@ -55,7 +55,7 @@ contract Escrow {
         uint256 _purchasePrice,
         uint256 _escrowAmount
     ) public payable onlySeller {
-        // Transfer NFT from seller to this contract
+        // Transfer the NFT into this contract
         IERC721(nftAddress).transferFrom(msg.sender, address(this), _nftID);
 
         isListed[_nftID] = true;
@@ -64,49 +64,47 @@ contract Escrow {
         buyer[_nftID] = _buyer;
     }
 
-    // Put Under Contract (only buyer - payable escrow)
+    // Put under contract (only buyer - payable escrow)
     function depositEarnest(uint256 _nftID) public payable onlyBuyer(_nftID) {
-        require(msg.value >= escrowAmount[_nftID]);
+        require(msg.value >= escrowAmount[_nftID], "Not enough earnest money");
     }
 
     // Update Inspection Status (only inspector)
-    function updateInspectionStatus(uint256 _nftID, bool _passed)
-        public
-        onlyInspector
-    {
+    function updateInspectionStatus(
+        uint256 _nftID,
+        bool _passed
+    ) public onlyInspection {
         inspectionPassed[_nftID] = _passed;
     }
 
-    // Approve Sale
     function approveSale(uint256 _nftID) public {
         approval[_nftID][msg.sender] = true;
     }
 
-    // Finalize Sale
-    // -> Require inspection status (add more items here, like appraisal)
-    // -> Require sale to be authorized
-    // -> Require funds to be correct amount
-    // -> Transfer NFT to buyer
-    // -> Transfer Funds to Seller
-    function finalizeSale(uint256 _nftID) public {
-        require(inspectionPassed[_nftID]);
-        require(approval[_nftID][buyer[_nftID]]);
-        require(approval[_nftID][seller]);
-        require(approval[_nftID][lender]);
+    function finalizeSale(uint256 _nftID) public payable {
+        require(inspectionPassed[_nftID], "Inspection not passed");
+        require(
+            approval[_nftID][buyer[_nftID]] &&
+                approval[_nftID][seller] &&
+                approval[_nftID][lender],
+            "Not all parties approved"
+        );
         require(address(this).balance >= purchasePrice[_nftID]);
 
         isListed[_nftID] = false;
 
+        // Transfer the NFT to the buyer
+        IERC721(nftAddress).transferFrom(address(this), buyer[_nftID], _nftID);
+
+        // Transfer fund to seller
         (bool success, ) = payable(seller).call{value: address(this).balance}(
             ""
         );
-        require(success);
-
-        IERC721(nftAddress).transferFrom(address(this), buyer[_nftID], _nftID);
+        require(success, "Transfer failed.");
     }
 
     // Cancel Sale (handle earnest deposit)
-    // -> if inspection status is not approved, then refund, otherwise send to seller
+    // if inspection status is not approved, then refund, otherwise send to seller
     function cancelSale(uint256 _nftID) public {
         if (inspectionPassed[_nftID] == false) {
             payable(buyer[_nftID]).transfer(address(this).balance);
